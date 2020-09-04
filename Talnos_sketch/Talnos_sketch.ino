@@ -45,12 +45,28 @@ byte speedMIN = 60, speedMAX = 90, tempMIN = 30, tempMAX = 70;
 #define FAN_PIN_1 10           
 #define FAN_PIN_2 11
 #define LED_FAN_PIN 5
+#define LED_FAN_BR 150 //яркость подсветки 0-255
 
-#define TSD_0 98 //нидние пороги вентилляторов 0-100
-#define TSD_1 99
-#define TSD_2 20
-#define LOW_TSD_2 98
-         
+//#define UP_TSD_FANMOD_0 60
+//#define DOWN_TSD_FANMOD_0 45
+//#define UP_TSD_FANMOD_1 90
+//#define DOWN_TSD_FANMOD_1 60
+//#define TSD_0 98 //нидние пороги вентилляторов 0-100
+//#define TSD_1 99
+//#define TSD_2 20
+//#define LOW_TSD_2 98
+
+#define MAX_FAN_VALUE 1023 //мкасимальное значение вентиллятора
+#define STABLE_FAN_VALUE 1000 //значение при котором вентиллятор точно не остановится
+#define NULL_FAN_VALUE 0 // значение при котором вентиллятор выключен
+#define START_FAN_VALUE 300 //значение после которого начинается линейный режим управления сквадностью   
+
+#define UP_TSD_2_FANMOD_0 80
+#define DOWN_TSD_1_FANMOD_0 45
+#define UP_TSD_1_FANMOD_0 60
+#define UP_TSD_FANMOD_1 90
+#define DOWN_TSD_FANMOD_1 60
+#define DOWN_TSD_FANMOD_2 30
 
 //#define R_PIN 5             // на мосфет ленты, красный
 //#define G_PIN 4             // на мосфет ленты, зелёный
@@ -169,13 +185,20 @@ uint16_t DUTY_0;
 uint16_t DUTY_1;
 uint16_t DUTY_2;
 uint16_t LED_DUTY;
-int duty_I;
-float TSD_0_F = TSD_0;
-float TSD_1_F = TSD_1;
-float TSD_2_F = TSD_2;
-float LOW_TSD_2_F = LOW_TSD_2;
-bool comeback_flag;
-u8 FAN_MODE;
+//float TSD_0_F = TSD_0;
+//float TSD_1_F = TSD_1;
+//float TSD_2_F = TSD_2;
+//float LOW_TSD_2_F = LOW_TSD_2;
+bool comeback_flag = 1;
+u8 FAN_MODE_MENU;
+u16 DUTY; //переменная для функции расчета скважности fanmod_duty
+
+enum FANMODS{
+  FAN_MOD_0, //режим с двумя уровнями работы вентиллятора, в пером уровне ШИМ на миниальном стабильном урове, вроторой уровень 100% скважность
+  FAN_MOD_1, //режим для шумных вентилляторов или для тех, которые плохо дружат с ШИМ не 100% скважности, в таком режиме вентиллятор либо кллючен на полную либо выключен
+  FAN_MOD_2, // режим для вентилляторов которые хорошо дружат с ШИМ после какого-то порога
+};
+unsigned long nobackl_timer;
 
 void setup() {
   Serial.begin(9600);
@@ -196,13 +219,13 @@ void setup() {
   lcd.clear();            // очистить дисплей
   //show_logo();            // показать логотип
 
-  Timer1.pwm(FAN_PIN_0, 1023);
+  Timer1.pwm(FAN_PIN_0, 0);
   Timer1.pwm(FAN_PIN_1, 0);
- // Timer2.pwm(FAN_PIN_2, 1023);
-  analogWrite(FAN_PIN_2, TSD_2); //включаем черный вентиллятор на минималку
-  analogWrite(LED_FAN_PIN, 255);
+//  analogWrite(FAN_PIN_2, 254); 
+  //мб плавное включение диодов при сэтвпе через подготовленную функцию
+  analogWrite(LED_FAN_PIN, 0);
 
-  delay(1000);               // на 2 секунды
+  //delay(1000);
   lcd.clear();               // очистить дисплей
   PCdata[8] = speedMAX;
   PCdata[9] = speedMIN;
@@ -216,7 +239,14 @@ void setup() {
   pinMode(A1, INPUT);
   //ШИМ на диод питания
   SoftPWMBegin();
-  SoftPWMSet(POWER_LED_PIN, POWER_LED_BR);  
+  SoftPWMSet(POWER_LED_PIN, POWER_LED_BR);
+  SoftPWMSet(FAN_PIN_2, 0);
+  
+  for( u8 i = 0; i < LED_FAN_BR; i++){
+    analogWrite(LED_FAN_PIN, i);
+    delay(20);
+  }
+  analogWrite(LED_FAN_PIN, LED_FAN_BR);
 }
 // 8-maxFAN, 9-minFAN, 10-maxTEMP, 11-minTEMP, 12-mnlFAN
 
@@ -228,27 +258,40 @@ void loop() {
   updateDisplay();                    // обновить показания на дисплее
   timeoutTick();  //не хочу отключать дисплей пока дебажу
   parsing();    
-
+  //fan_mode_menu();
    if (loop_flag != 0 )  lcd_backl(loop_flag);
-   
-      if (duty >= TSD_0) DUTY_0 = (duty/100) * 1023;
-      else DUTY_0 = (TSD_0_F * 1023)/100;
-      
-      if (duty >= TSD_1) DUTY_1 = (duty/100) * 1023;
-      else DUTY_1 = 0; //(TSD_1_F/100) * 1023;
-      
-      if (duty >= TSD_2 ) DUTY_2 = (duty/100) * 255;
-      else{ 
-      if (duty <= LOW_TSD_2)   DUTY_2 = (TSD_0_F/100) * 255;
-      else DUTY_2 = (LOW_TSD_2_F * 1023)/100; //в 5.0 не исправленно
-      
-      }
+   if(FAN_MODE_MENU == 0){ //основной вариант работы вентилляторов
+//        if (duty > UP_TSD_FANMOD_0) DUTY_0 = 1024;
+//        else if (duty < DOWN_TSD_FANMOD_0) DUTY_0 = 0; //60 и 45 засунуть в настройки
+        DUTY_0 = fan_mode_duty(duty, FAN_MOD_0, &DUTY_0);
+        DUTY_1 = fan_mode_duty(duty, FAN_MOD_1, &DUTY_1);
+        DUTY_2 = fan_mode_duty(duty, FAN_MOD_0, &DUTY_2);
+    
+  
+//      if (duty >= TSD_2 ) DUTY_2 = (duty/100) * 255;
+//      else{ 
+//      if (duty <= LOW_TSD_2)   DUTY_2 = (TSD_0_F/100) * 255;
+//      else DUTY_2 = (LOW_TSD_2_F * 1023)/100; //в 5.0 не исправленно
+//      }
+   }
+   if(FAN_MODE_MENU == 1){
+    DUTY_0 = 0;
+    DUTY_1 = 0;
+    DUTY_2 = 0;
+    }
+    if(FAN_MODE_MENU == 2){
+    DUTY_0 = 1023;
+    DUTY_1 = 0;
+    DUTY_2 = 1023;
+    }
       LED_DUTY = duty;
-      if (millis() - Backlight_timer >= 10000) {
+      if (millis() - Backlight_timer >= 1000) {
       Timer1.pwm(FAN_PIN_0, DUTY_0); // 0-1023 duty_cycle/ 100)* 1023 //норм способ регулировки скважности Timer1.pwm(FAN_PIN_0, duty * 10);(было)
       Timer1.pwm(FAN_PIN_1, DUTY_1); // 0-1023 FAN_3 черный
-      analogWrite(FAN_PIN_2, DUTY_2); //74 0-255
-      analogWrite(LED_FAN_PIN, (duty/100)*255);
+      SoftPWMSet(FAN_PIN_2, constrain((DUTY_2 / 4), 0, 255));
+//      analogWrite(FAN_PIN_2, 75); //74 0-255 constrain((DUTY_2 / 4), 0, 255) каким-то боком тут получается 256 иногда, поэтому диапазон ограничен
+       
+      
       
       Backlight_timer = millis();
       }
@@ -273,8 +316,10 @@ void buttonsTick() {
   if (btn2_sig && !btn2_flag) {
     //теперь эта кнопка дебажит вентилляторы
     FAN_BUTTON ++;
-    FAN_MODE++;
-    if (FAN_MODE >= 3) FAN_MODE = 0;
+    FAN_MODE_MENU++;
+    reDraw_flag = 1;
+//    updateDisplay_flag = 1;
+    if (FAN_MODE_MENU >= 3) FAN_MODE_MENU = 0;
 //    display_mode--;
 //    reDraw_flag = 1;
 //    if (display_mode < 0) display_mode = 1; //display_mode = 2;
@@ -407,13 +452,11 @@ void draw_stats_2() {
   if ((duty) < 10) perc = "% ";
   else if ((duty) < 100) perc = "%";
   else perc = "";  lcd.print(perc);
-
   lcd.setCursor(6, 1); lcd.print((int)DUTY_0); //lcd.write(223);
-  lcd.setCursor(16, 1); lcd.print(LED_DUTY); //lcd.write(223);
+  lcd.setCursor(16, 1); lcd.print((int)((duty/100)*255)); //lcd.write(223);
   lcd.setCursor(6, 2); lcd.print((int)DUTY_1); //lcd.write(223);
-  lcd.setCursor(16, 2); lcd.print(FAN_MODE); //lcd.write(223);
-  lcd.setCursor(6, 3); lcd.print((int)DUTY_2); //lcd.write(223);
-
+  lcd.setCursor(16, 2); lcd.print(FAN_MODE_MENU); //lcd.write(223);
+  lcd.setCursor(6, 3); lcd.print(constrain((DUTY_2 / 4), 0, 255)); //lcd.write(223);
   lcd.setCursor(11, 3);
   sec = (long)(millis() - uptime_timer) / 1000;
   hrs = floor((sec / 3600));
@@ -540,12 +583,18 @@ void draw_plot_symb() {
 void timeoutTick() {  
    while (Serial.available() < 1){
     if ((millis() - timeout > 5000) && timeOut_flag) {        
+      
       SoftPWMSet(POWER_LED_PIN, 0); 
+      loop_flag = 2;
+      while((millis() - nobackl_timer) > 999){  //зависнуть в цикле на секунду чтобы выключить подсветку плавно
+        lcd_backl(loop_flag);
+        nobackl_timer = millis();
+      }
       //getTemperature();    
       index = 0;
       updateTemp_flag = 1;
       //getTemperature(); 
-      loop_flag = 2;
+      
       if (PWM == 255) lcd.clear();
       lcd.setCursor(5, 1);
       lcd.print("CONNECTION");
@@ -620,4 +669,28 @@ switch(flag){
      flag = 0;
      return flag;
      }
+}
+
+int fan_mode_duty (u8 FAN_DUTY, u8 FAN_MOD, int *current_fan ){ //адрес ячейки в которой хранится текущее значение скважности вентиллятора
+  switch(FAN_MOD){
+    case FAN_MOD_0:
+    if(FAN_DUTY > UP_TSD_2_FANMOD_0) DUTY = MAX_FAN_VALUE;
+    else if((*current_fan > STABLE_FAN_VALUE) && (FAN_DUTY > UP_TSD_1_FANMOD_0)) DUTY = *current_fan;
+         else if(FAN_DUTY > UP_TSD_1_FANMOD_0) DUTY = STABLE_FAN_VALUE;
+               else if(FAN_DUTY < DOWN_TSD_1_FANMOD_0) DUTY = NULL_FAN_VALUE; 
+                     else if(*current_fan > STABLE_FAN_VALUE) DUTY = STABLE_FAN_VALUE;
+                          else DUTY = *current_fan;      //вернть значение по адресу ячейки с текущими данными. елис был 0 оставить 0 если было 100 оставить 100 60 - 45 DUTY = STABLE_FAN_VALUE;
+    break;
+    case FAN_MOD_1:
+    if (FAN_DUTY > UP_TSD_FANMOD_1) DUTY = MAX_FAN_VALUE;
+    else if (FAN_DUTY < DOWN_TSD_FANMOD_1) DUTY = NULL_FAN_VALUE;
+         else DUTY = *current_fan;
+    break;
+    case FAN_MOD_2:
+    if (FAN_DUTY < DOWN_TSD_FANMOD_2) DUTY = START_FAN_VALUE;
+    else DUTY = (int)(((float)FAN_DUTY / 100) * 1024);
+    break;
+
+}
+  return DUTY;
 }
