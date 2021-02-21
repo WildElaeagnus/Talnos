@@ -42,8 +42,8 @@ byte speedMIN = 60, speedMAX = 90, tempMIN = 30, tempMAX = 70;
 // ----------------------- ПИНЫ ---------------------------
 
 #define FAN_PIN_0 9           // на мосфет вентиляторов
-#define FAN_PIN_1 10           
-#define FAN_PIN_2 11
+#define FAN_PIN_1 11           
+#define FAN_PIN_2 10
 #define LED_FAN_PIN 5
 #define LED_FAN_BR 150 //яркость подсветки 0-255
 
@@ -63,8 +63,8 @@ byte speedMIN = 60, speedMAX = 90, tempMIN = 30, tempMAX = 70;
 
 #define UP_TSD_2_FANMOD_0 80
 #define DOWN_TSD_1_FANMOD_0 45
-#define UP_TSD_1_FANMOD_0 60
-#define UP_TSD_FANMOD_1 90
+#define UP_TSD_1_FANMOD_0 70
+#define UP_TSD_FANMOD_1 75
 #define DOWN_TSD_FANMOD_1 60
 #define DOWN_TSD_FANMOD_2 30
 
@@ -263,9 +263,9 @@ void loop() {
    if(FAN_MODE_MENU == 0){ //основной вариант работы вентилляторов
 //        if (duty > UP_TSD_FANMOD_0) DUTY_0 = 1024;
 //        else if (duty < DOWN_TSD_FANMOD_0) DUTY_0 = 0; //60 и 45 засунуть в настройки
-        DUTY_0 = fan_mode_duty(duty, FAN_MOD_0, &DUTY_0);
+        DUTY_0 = fan_mode_duty(duty, FAN_MOD_1, &DUTY_0);
         DUTY_1 = fan_mode_duty(duty, FAN_MOD_1, &DUTY_1);
-        DUTY_2 = fan_mode_duty(duty, FAN_MOD_0, &DUTY_2);
+        DUTY_2 = fan_mode_duty(duty, FAN_MOD_1, &DUTY_2);
     
   
 //      if (duty >= TSD_2 ) DUTY_2 = (duty/100) * 255;
